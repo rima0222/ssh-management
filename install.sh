@@ -10,15 +10,6 @@ install_reqs() {
     apt update && apt install -y python3 python3-flask bc vnstat
 }
 
-# --- حذف کامل پنل ---
-uninstall_panel() {
-    pkill -f web_panel.py
-    rm /root/web_panel.py /root/install.sh
-    crontab -l | grep -v "install.sh" | crontab -
-    echo "⚠️ پنل و تنظیمات با موفقیت حذف شدند."
-    exit 0
-}
-
 # --- مانیتورینگ حجم ---
 check_status() {
     tmp_db=$(mktemp)
@@ -62,8 +53,8 @@ HTML = '''
     th { background: #34495e; color: white; }
     .btn { padding: 6px 12px; border-radius: 4px; border: none; cursor: pointer; color: white; text-decoration: none; font-size: 12px; }
     .btn-del { background: #e74c3c; } .btn-reset { background: #3498db; } .btn-toggle { background: #f39c12; }
-    .btn-un { background: #000; display: inline-block; margin-top: 25px; padding: 10px; }
     .backup-box { background: #eef9f0; padding: 15px; border-radius: 8px; margin-top: 20px; border: 1px dashed #27ae60; }
+    input { padding: 8px; margin: 5px; border: 1px solid #ddd; border-radius: 4px; }
 </style></head>
 <body><div class="container">
     <h2>🚀 مدیریت هوشمند کاربران SSH</h2>
@@ -95,7 +86,6 @@ HTML = '''
             <button type="submit" class="btn btn-toggle" style="background:#8e44ad">⬆️ آپلود و بازیابی کاربران</button>
         </form>
     </div>
-    <a href="/uninstall" class="btn btn-un" onclick="return confirm('آیا مطمئن هستید که کل پنل پاک شود؟')">❌ حذف کامل پنل از سرور</a>
 </div></body></html>
 '''
 
@@ -117,11 +107,6 @@ def upload():
         file.save(DB_FILE)
         subprocess.run(["/root/install.sh", "restore"])
     return redirect('/')
-
-@app.route('/uninstall')
-def uninstall():
-    subprocess.run(["/root/install.sh", "uninstall"])
-    return "Panel Uninstalled."
 
 @app.route('/backup_file')
 def backup_file(): return send_file(DB_FILE, as_attachment=True)
@@ -145,12 +130,12 @@ EOF
 # --- دستورات مدیریتی ---
 case $1 in
     cron) check_status ;;
-    uninstall) uninstall_panel ;;
     add_api)
         sed -i "/^$2|/d" "$DB_FILE"; userdel -f "$2" 2>/dev/null
         exp_date=$(date -d "+$4 days" +%Y-%m-%d)
         useradd -m -s /usr/sbin/nologin -e "$exp_date" "$2"
         echo "$2:$3" | chpasswd
+        echo "$2 hard maxlogins 1" >> /etc/security/limits.conf
         echo "$2|$exp_date|$5|$3|0|active" >> "$DB_FILE"
         ;;
     del_api) sed -i "/^$2|/d" "$DB_FILE"; userdel -f "$2" 2>/dev/null ;;
@@ -167,6 +152,7 @@ case $1 in
             if ! id "$user" &>/dev/null; then
                 useradd -m -s /usr/sbin/nologin -e "$exp" "$user"
                 echo "$user:$pass" | chpasswd
+                echo "$user hard maxlogins 1" >> /etc/security/limits.conf
                 [ "$status" == "disabled" ] && usermod -L "$user"
             fi
         done < "$DB_FILE" ;;
