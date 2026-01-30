@@ -8,8 +8,8 @@ touch "$DB_FILE"
 # --- تابع نصب پیش‌نیازها و تنظیم پورت ۴۴۳ ---
 install_requirements() {
     apt update && apt install -y python3 python3-flask bc vnstat
-    # تنظیم پورت SSH روی 443 (اگر قبلاً تنظیم نشده باشد)
-    sed -i 's/#Port 22/Port 22\nPort 443/' /etc/ssh/sshd_config
+    # تنظیم پورت SSH روی 5000 (اگر قبلاً تنظیم نشده باشد)
+    sed -i 's/#Port 22/Port 22\nPort 5000/' /etc/ssh/sshd_config
     systemctl restart ssh
 }
 
