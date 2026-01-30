@@ -1,11 +1,14 @@
 #!/bin/bash
 
+# --- تنظیمات اولیه ---
 DB_FILE="/root/users.db"
 PORT_WEB=5000
-
 touch "$DB_FILE"
 
-# --- توابع سیستمی ---
+# --- نصب پیش‌نیازها ---
+apt update && apt install -y python3 python3-flask bc vnstat
+
+# --- تابع بررسی حجم (Cron) ---
 check_status() {
     tmp_db=$(mktemp)
     while IFS='|' read -r user exp limit pass used status; do
@@ -29,29 +32,16 @@ check_status() {
     mv "$tmp_db" "$DB_FILE"
 }
 
-restore_all() {
-    while IFS='|' read -r user exp limit pass used status; do
-        if ! id "$user" &>/dev/null; then
-            useradd -m -s /usr/sbin/nologin -e "$exp" "$user"
-            echo "$user:$pass" | chpasswd
-            echo "$user hard maxlogins 1" >> /etc/security/limits.conf
-            [ "$status" == "disabled" ] && usermod -L "$user"
-        fi
-    done < "$DB_FILE"
-}
-
-# --- پنل وب (پایتون) ---
+# --- بخش پنل وب پایتون ---
 run_web() {
     cat <<EOF > /root/web_panel.py
 from flask import Flask, render_template_string, request, redirect, send_file
 import subprocess, os
-
 app = Flask(__name__)
 DB_FILE = "$DB_FILE"
-
 HTML = '''
 <!DOCTYPE html>
-<html dir="rtl"><head><meta charset="UTF-8"><title>SSH Pro Sync Panel</title>
+<html dir="rtl"><head><meta charset="UTF-8"><title>SSH Advanced Panel</title>
 <style>
     body { font-family: Tahoma; background: #f4f7f6; padding: 20px; }
     .container { max-width: 1000px; margin: auto; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
@@ -65,7 +55,7 @@ HTML = '''
     input { padding: 8px; margin: 5px; border: 1px solid #ddd; border-radius: 4px; }
 </style></head>
 <body><div class="container">
-    <h2>🚀 مدیریت کاربران و جابه‌جایی سرور</h2>
+    <h2>🚀 مدیریت هوشمند کاربران SSH</h2>
     <table>
         <tr><th>کاربر</th><th>انقضا</th><th>حجم</th><th>مصرف</th><th>باقی‌مانده</th><th>وضعیت</th><th>عملیات</th></tr>
         {% for u in users %}
@@ -80,68 +70,53 @@ HTML = '''
                 <a href="/delete/{{ u[0] }}" class="btn btn-del">حذف</a>
             </td>
         </tr>{% endfor %}
-    </table>
-    <hr>
+    </table><hr>
     <form action="/save" method="post">
         <input type="text" name="u" placeholder="نام کاربری" required>
         <input type="text" name="p" placeholder="رمز" required>
         <input type="number" name="d" placeholder="روز" required>
         <input type="number" name="v" placeholder="حجم (GB)" required>
-        <button type="submit" class="btn btn-add">ذخیره کاربر جدید / ویرایش</button>
+        <button type="submit" class="btn btn-add">ذخیره کاربر</button>
     </form>
-    
     <div class="upload-section">
-        <h3>🔄 جابه‌جایی سرور (بک‌آپ و ریستور)</h3>
-        <a href="/backup_file" class="btn btn-reset" style="padding: 10px;">📥 ۱. دانلود فایل بک‌آپ (users.db)</a>
-        <br><br>
-        <form action="/upload" method="post" enctype="multipart/form-data">
-            <label><b>۲. آپلود فایل در سرور جدید:</b></label>
+        <h3>🔄 جابه‌جایی سرور</h3>
+        <a href="/backup_file" class="btn btn-reset" style="padding: 10px;">📥 دانلود بک‌آپ</a>
+        <form action="/upload" method="post" enctype="multipart/form-data" style="display:inline-block; margin-right: 20px;">
             <input type="file" name="file" accept=".db" required>
-            <button type="submit" class="btn btn-toggle" style="background: #8e44ad;">⬆️ آپلود و بازیابی کاربران</button>
+            <button type="submit" class="btn btn-toggle" style="background: #8e44ad;">⬆️ آپلود و بازیابی</button>
         </form>
     </div>
 </div></body></html>
 '''
-
 @app.route('/')
 def index():
-    if not os.path.exists(DB_FILE): return "Database not found"
+    if not os.path.exists(DB_FILE): return ""
     with open(DB_FILE, "r") as f: users = [l.strip().split('|') for l in f if l.strip()]
     return render_template_string(HTML, users=users)
-
 @app.route('/save', methods=['POST'])
 def save():
-    subprocess.run(["/root/ssh-pro.sh", "add_api", request.form['u'], request.form['p'], request.form['d'], request.form['v']])
+    subprocess.run(["/root/install.sh", "add_api", request.form['u'], request.form['p'], request.form['d'], request.form['v']])
     return redirect('/')
-
 @app.route('/upload', methods=['POST'])
 def upload():
     file = request.files['file']
-    if file:
-        file.save(DB_FILE)
-        subprocess.run(["/root/ssh-pro.sh", "restore"])
-        return "✅ فایل با موفقیت آپلود شد و تمام کاربران در این سرور ساخته شدند. <a href='/'>بازگشت به پنل</a>"
-
+    if file: file.save(DB_FILE); subprocess.run(["/root/install.sh", "restore"])
+    return redirect('/')
 @app.route('/backup_file')
 def backup_file(): return send_file(DB_FILE, as_attachment=True)
-
 @app.route('/delete/<u_str>')
-def delete(u_str): subprocess.run(["/root/ssh-pro.sh", "del_api", u_str]); return redirect('/')
-
+def delete(u_str): subprocess.run(["/root/install.sh", "del_api", u_str]); return redirect('/')
 @app.route('/reset/<u_str>')
-def reset(u_str): subprocess.run(["/root/ssh-pro.sh", "reset_api", u_str]); return redirect('/')
-
+def reset(u_str): subprocess.run(["/root/install.sh", "reset_api", u_str]); return redirect('/')
 @app.route('/toggle/<u_str>')
-def toggle(u_str): subprocess.run(["/root/ssh-pro.sh", "toggle_api", u_str]); return redirect('/')
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=$PORT_WEB)
+def toggle(u_str): subprocess.run(["/root/install.sh", "toggle_api", u_str]); return redirect('/')
+if __name__ == '__main__': app.run(host='0.0.0.0', port=$PORT_WEB)
 EOF
     pkill -f web_panel.py
     nohup python3 /root/web_panel.py > /dev/null 2>&1 &
 }
 
-# --- مدیریت دستورات ---
+# --- مدیریت دستورات اجرایی ---
 case $1 in
     cron) check_status ;;
     add_api)
@@ -158,12 +133,25 @@ case $1 in
     toggle_api)
         line=$(grep "^$2|" "$DB_FILE")
         if [[ "$line" == *"|active" ]]; then
-            sed -i "/^$2|/s/|active/|disabled/" "$DB_FILE"
-            skill -u "$2" 2>/dev/null; usermod -L "$2" 2>/dev/null
+            sed -i "/^$2|/s/|active/|disabled/" "$DB_FILE"; skill -u "$2" 2>/dev/null; usermod -L "$2" 2>/dev/null
         else
-            sed -i "/^$2|/s/|disabled/|active/; /^$2|/s/|expired/|active/" "$DB_FILE"
-            usermod -U "$2" 2>/dev/null
+            sed -i "/^$2|/s/|disabled/|active/; /^$2|/s/|expired/|active/" "$DB_FILE"; usermod -U "$2" 2>/dev/null
         fi ;;
-    restore) restore_all ;;
-    *) run_web; echo "🚀 پنل اجرا شد: http://YOUR_IP:5000" ;;
+    restore)
+        while IFS='|' read -r user exp limit pass used status; do
+            if ! id "$user" &>/dev/null; then
+                useradd -m -s /usr/sbin/nologin -e "$exp" "$user"
+                echo "$user:$pass" | chpasswd
+                echo "$user hard maxlogins 1" >> /etc/security/limits.conf
+                [ "$status" == "disabled" ] && usermod -L "$user"
+            fi
+        done < "$DB_FILE" ;;
+    *)
+        # تنظیم خودکار در اولین اجرا
+        cp "$0" /root/install.sh
+        chmod +x /root/install.sh
+        (crontab -l 2>/dev/null | grep -q "install.sh") || (crontab -l 2>/dev/null; echo "*/5 * * * * /bin/bash /root/install.sh cron > /dev/null 2>&1") | crontab -
+        run_web
+        echo "✅ پنل با موفقیت فعال شد: http://IP:5000"
+        ;;
 esac
