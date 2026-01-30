@@ -1,16 +1,13 @@
 #!/bin/bash
 
-# --- تنظیمات سیستمی ---
+# --- تنظیمات اختصاصی ---
 DB_FILE="/root/users.db"
 PORT_WEB=5000
+ADMIN_USER="admin"        # <--- نام کاربری برای ورود به پنل
+ADMIN_PASS="123456"       # <--- رمز عبور برای ورود به پنل
 touch "$DB_FILE"
 
-# --- نصب پیش‌نیازها ---
-install_reqs() {
-    apt update && apt install -y python3 python3-flask bc vnstat
-}
-
-# --- مانیتورینگ حجم ---
+# --- تابع مانیتورینگ حجم ---
 check_status() {
     tmp_db=$(mktemp)
     while IFS='|' read -r user exp limit pass used status; do
@@ -34,12 +31,13 @@ check_status() {
     mv "$tmp_db" "$DB_FILE"
 }
 
-# --- پنل وب گرافیکی ---
+# --- ساخت پنل وب با قابلیت Login و بک‌آپ ---
 run_web() {
     cat <<EOF > /root/web_panel.py
-from flask import Flask, render_template_string, request, redirect, send_file
+from flask import Flask, render_template_string, request, redirect, send_file, session
 import subprocess, os
 app = Flask(__name__)
+app.secret_key = 'ssh_secret_key'
 DB_FILE = "$DB_FILE"
 
 HTML = '''
@@ -47,17 +45,17 @@ HTML = '''
 <html dir="rtl"><head><meta charset="UTF-8"><title>SSH Panel Pro</title>
 <style>
     body { font-family: Tahoma; background: #f4f7f6; padding: 20px; }
-    .container { max-width: 900px; margin: auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+    .container { max-width: 1000px; margin: auto; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
     table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-    th, td { border: 1px solid #ddd; padding: 10px; text-align: center; }
-    th { background: #34495e; color: white; }
-    .btn { padding: 6px 12px; border-radius: 4px; border: none; cursor: pointer; color: white; text-decoration: none; font-size: 12px; }
-    .btn-del { background: #e74c3c; } .btn-reset { background: #3498db; } .btn-toggle { background: #f39c12; }
-    .backup-box { background: #eef9f0; padding: 15px; border-radius: 8px; margin-top: 20px; border: 1px dashed #27ae60; }
+    th, td { border: 1px solid #eee; padding: 12px; text-align: center; }
+    th { background: #2c3e50; color: white; }
+    .btn { padding: 6px 12px; border-radius: 4px; border: none; cursor: pointer; color: white; text-decoration: none; font-size: 12px; margin: 2px; display: inline-block; }
+    .btn-add { background: #27ae60; } .btn-del { background: #e74c3c; } .btn-reset { background: #3498db; } .btn-toggle { background: #f39c12; }
+    .backup-section { background: #f9f9f9; padding: 15px; border-radius: 8px; margin-top: 20px; border: 1px dashed #ccc; }
     input { padding: 8px; margin: 5px; border: 1px solid #ddd; border-radius: 4px; }
 </style></head>
 <body><div class="container">
-    <h2>🚀 مدیریت هوشمند کاربران SSH</h2>
+    <h2>🚀 پنل مدیریت SSH (ورود موفق)</h2>
     <table>
         <tr><th>کاربر</th><th>انقضا</th><th>حجم</th><th>مصرف</th><th>وضعیت</th><th>عملیات</th></tr>
         {% for u in users %}
@@ -76,52 +74,86 @@ HTML = '''
         <input type="text" name="p" placeholder="رمز" required>
         <input type="number" name="d" placeholder="تعداد روز" required>
         <input type="number" name="v" placeholder="حجم (GB)" required>
-        <button type="submit" style="background:#27ae60; color:white; border:none; padding:8px 15px; border-radius:4px; cursor:pointer;">افزودن کاربر</button>
+        <button type="submit" class="btn btn-add">افزودن کاربر</button>
     </form>
-    <div class="backup-box">
-        <h3>🔄 مدیریت بک‌آپ و جابه‌جایی</h3>
-        <a href="/backup_file" class="btn btn-reset" style="background:#16a085">📥 دانلود فایل بک‌آپ</a>
-        <form action="/upload" method="post" enctype="multipart/form-data" style="display:inline-block; margin-right:20px;">
+    <div class="backup-section">
+        <h3>🔄 بک‌آپ و بازیابی</h3>
+        <a href="/backup_file" class="btn btn-reset" style="background:#16a085">📥 دانلود بک‌آپ</a>
+        <form action="/upload" method="post" enctype="multipart/form-data" style="display:inline-block; margin-right:15px;">
             <input type="file" name="file" accept=".db" required>
-            <button type="submit" class="btn btn-toggle" style="background:#8e44ad">⬆️ آپلود و بازیابی کاربران</button>
+            <button type="submit" class="btn btn-toggle" style="background:#8e44ad">⬆️ آپلود و بازیابی</button>
         </form>
     </div>
 </div></body></html>
 '''
 
-@app.route('/')
-def index():
-    if not os.path.exists(DB_FILE): return ""
+LOGIN_HTML = '''
+<!DOCTYPE html>
+<html dir="rtl"><head><meta charset="UTF-8"><title>Login</title>
+<style>
+    body { font-family: Tahoma; background: #2c3e50; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+    .login-box { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); text-align: center; }
+    input { display: block; width: 100%; margin: 10px 0; padding: 10px; box-sizing: border-box; border: 1px solid #ddd; border-radius: 5px; }
+    button { width: 100%; padding: 10px; background: #27ae60; color: white; border: none; border-radius: 5px; cursor: pointer; }
+</style></head>
+<body><div class="login-box">
+    <h2>ورود به پنل مدیریت</h2>
+    <form method="post">
+        <input type="text" name="user" placeholder="نام کاربری" required>
+        <input type="password" name="pass" placeholder="رمز عبور" required>
+        <button type="submit">ورود</button>
+    </form>
+</div></body></html>
+'''
+
+@app.route('/', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        if request.form['user'] == '$ADMIN_USER' and request.form['pass'] == '$ADMIN_PASS':
+            session['logged_in'] = True
+            return redirect('/panel')
+    return render_template_string(LOGIN_HTML)
+
+@app.route('/panel')
+def panel():
+    if not session.get('logged_in'): return redirect('/')
     with open(DB_FILE, "r") as f: users = [l.strip().split('|') for l in f if l.strip()]
     return render_template_string(HTML, users=users)
 
 @app.route('/save', methods=['POST'])
 def save():
+    if not session.get('logged_in'): return redirect('/')
     subprocess.run(["/root/install.sh", "add_api", request.form['u'], request.form['p'], request.form['d'], request.form['v']])
-    return redirect('/')
+    return redirect('/panel')
 
 @app.route('/upload', methods=['POST'])
 def upload():
+    if not session.get('logged_in'): return redirect('/')
     file = request.files['file']
-    if file:
-        file.save(DB_FILE)
-        subprocess.run(["/root/install.sh", "restore"])
-    return redirect('/')
+    if file: file.save(DB_FILE); subprocess.run(["/root/install.sh", "restore"])
+    return redirect('/panel')
 
 @app.route('/backup_file')
-def backup_file(): return send_file(DB_FILE, as_attachment=True)
+def backup_file():
+    if not session.get('logged_in'): return redirect('/')
+    return send_file(DB_FILE, as_attachment=True)
 
 @app.route('/delete/<u_str>')
-def delete(u_str): subprocess.run(["/root/install.sh", "del_api", u_str]); return redirect('/')
+def delete(u_str):
+    if not session.get('logged_in'): return redirect('/')
+    subprocess.run(["/root/install.sh", "del_api", u_str]); return redirect('/panel')
 
 @app.route('/reset/<u_str>')
-def reset(u_str): subprocess.run(["/root/install.sh", "reset_api", u_str]); return redirect('/')
+def reset(u_str):
+    if not session.get('logged_in'): return redirect('/')
+    subprocess.run(["/root/install.sh", "reset_api", u_str]); return redirect('/panel')
 
 @app.route('/toggle/<u_str>')
-def toggle(u_str): subprocess.run(["/root/install.sh", "toggle_api", u_str]); return redirect('/')
+def toggle(u_str):
+    if not session.get('logged_in'): return redirect('/')
+    subprocess.run(["/root/install.sh", "toggle_api", u_str]); return redirect('/panel')
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=$PORT_WEB)
+if __name__ == '__main__': app.run(host='0.0.0.0', port=$PORT_WEB)
 EOF
     pkill -f web_panel.py
     nohup python3 /root/web_panel.py > /dev/null 2>&1 &
@@ -157,10 +189,9 @@ case $1 in
             fi
         done < "$DB_FILE" ;;
     *)
-        install_reqs
         cp "$0" /root/install.sh; chmod +x /root/install.sh
         (crontab -l 2>/dev/null | grep -q "install.sh") || (crontab -l 2>/dev/null; echo "*/5 * * * * /bin/bash /root/install.sh cron > /dev/null 2>&1") | crontab -
         run_web
-        echo "✅ پنل با موفقیت روی پورت ۵۰۰۰ اجرا شد."
+        echo "✅ پنل با موفقیت اجرا شد."
         ;;
 esac
