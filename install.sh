@@ -1,14 +1,30 @@
 #!/bin/bash
 
-# --- تنظیمات اولیه ---
+# --- تنظیمات سیستمی ---
 DB_FILE="/root/users.db"
 PORT_WEB=5000
 touch "$DB_FILE"
 
-# --- نصب پیش‌نیازها ---
-apt update && apt install -y python3 python3-flask bc vnstat
+# --- تابع نصب پیش‌نیازها و تنظیم پورت ۴۴۳ ---
+install_requirements() {
+    apt update && apt install -y python3 python3-flask bc vnstat
+    # تنظیم پورت SSH روی 443 (اگر قبلاً تنظیم نشده باشد)
+    sed -i 's/#Port 22/Port 22\nPort 443/' /etc/ssh/sshd_config
+    systemctl restart ssh
+}
 
-# --- تابع بررسی حجم (Cron) ---
+# --- تابع حذف کامل پنل از سرور ---
+uninstall_panel() {
+    pkill -f web_panel.py
+    rm /root/web_panel.py
+    rm /root/install.sh
+    # حذف کرون جاب
+    crontab -l | grep -v "install.sh" | crontab -
+    echo "⚠️ پنل و تمام تنظیمات با موفقیت حذف شدند."
+    exit 0
+}
+
+# --- هسته مانیتورینگ حجم ---
 check_status() {
     tmp_db=$(mktemp)
     while IFS='|' read -r user exp limit pass used status; do
@@ -32,7 +48,7 @@ check_status() {
     mv "$tmp_db" "$DB_FILE"
 }
 
-# --- بخش پنل وب پایتون ---
+# --- پنل وب گرافیکی ---
 run_web() {
     cat <<EOF > /root/web_panel.py
 from flask import Flask, render_template_string, request, redirect, send_file
@@ -41,21 +57,22 @@ app = Flask(__name__)
 DB_FILE = "$DB_FILE"
 HTML = '''
 <!DOCTYPE html>
-<html dir="rtl"><head><meta charset="UTF-8"><title>SSH Advanced Panel</title>
+<html dir="rtl"><head><meta charset="UTF-8"><title>SSH Pro 443 Panel</title>
 <style>
     body { font-family: Tahoma; background: #f4f7f6; padding: 20px; }
     .container { max-width: 1000px; margin: auto; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
     table { width: 100%; border-collapse: collapse; margin-top: 20px; }
     th, td { border: 1px solid #eee; padding: 10px; text-align: center; }
     th { background: #2c3e50; color: white; }
-    .btn { padding: 6px 12px; border-radius: 4px; border: none; cursor: pointer; color: white; text-decoration: none; font-size: 12px; margin: 2px; }
+    .btn { padding: 6px 12px; border-radius: 4px; border: none; cursor: pointer; color: white; text-decoration: none; font-size: 12px; margin: 2px; display: inline-block; }
     .btn-add { background: #27ae60; font-size: 14px; }
     .btn-del { background: #e74c3c; } .btn-reset { background: #3498db; } .btn-toggle { background: #f39c12; }
+    .btn-uninstall { background: #000; margin-top: 20px; }
     .upload-section { background: #e8f4fd; padding: 15px; border-radius: 8px; margin-top: 20px; border: 1px dashed #3498db; }
     input { padding: 8px; margin: 5px; border: 1px solid #ddd; border-radius: 4px; }
 </style></head>
 <body><div class="container">
-    <h2>🚀 مدیریت هوشمند کاربران SSH</h2>
+    <h2>🚀 مدیریت SSH (پورت ۴۴۳ فعال است)</h2>
     <table>
         <tr><th>کاربر</th><th>انقضا</th><th>حجم</th><th>مصرف</th><th>باقی‌مانده</th><th>وضعیت</th><th>عملیات</th></tr>
         {% for u in users %}
@@ -76,16 +93,17 @@ HTML = '''
         <input type="text" name="p" placeholder="رمز" required>
         <input type="number" name="d" placeholder="روز" required>
         <input type="number" name="v" placeholder="حجم (GB)" required>
-        <button type="submit" class="btn btn-add">ذخیره کاربر</button>
+        <button type="submit" class="btn btn-add">ذخیره کاربر (پورت ۴۴۳)</button>
     </form>
     <div class="upload-section">
-        <h3>🔄 جابه‌جایی سرور</h3>
-        <a href="/backup_file" class="btn btn-reset" style="padding: 10px;">📥 دانلود بک‌آپ</a>
-        <form action="/upload" method="post" enctype="multipart/form-data" style="display:inline-block; margin-right: 20px;">
+        <h3>🔄 جابه‌جایی سرور / بک‌آپ</h3>
+        <a href="/backup_file" class="btn btn-reset">📥 دانلود بک‌آپ</a>
+        <form action="/upload" method="post" enctype="multipart/form-data" style="display:inline-block; margin-right:15px;">
             <input type="file" name="file" accept=".db" required>
             <button type="submit" class="btn btn-toggle" style="background: #8e44ad;">⬆️ آپلود و بازیابی</button>
         </form>
     </div>
+    <a href="/uninstall" class="btn btn-uninstall" onclick="return confirm('آیا از حذف کامل پنل اطمینان دارید؟')">❌ حذف کامل پنل از سرور</a>
 </div></body></html>
 '''
 @app.route('/')
@@ -97,10 +115,14 @@ def index():
 def save():
     subprocess.run(["/root/install.sh", "add_api", request.form['u'], request.form['p'], request.form['d'], request.form['v']])
     return redirect('/')
+@app.route('/uninstall')
+def uninstall():
+    subprocess.run(["/root/install.sh", "uninstall"])
+    return "پنل حذف شد."
 @app.route('/upload', methods=['POST'])
 def upload():
-    file = request.files['file']
-    if file: file.save(DB_FILE); subprocess.run(["/root/install.sh", "restore"])
+    file = request.files['file']; file.save(DB_FILE)
+    subprocess.run(["/root/install.sh", "restore"])
     return redirect('/')
 @app.route('/backup_file')
 def backup_file(): return send_file(DB_FILE, as_attachment=True)
@@ -116,16 +138,15 @@ EOF
     nohup python3 /root/web_panel.py > /dev/null 2>&1 &
 }
 
-# --- مدیریت دستورات اجرایی ---
+# --- مدیریت دستورات ---
 case $1 in
     cron) check_status ;;
+    uninstall) uninstall_panel ;;
     add_api)
-        sed -i "/^$2|/d" "$DB_FILE"
-        userdel -f "$2" 2>/dev/null
+        sed -i "/^$2|/d" "$DB_FILE"; userdel -f "$2" 2>/dev/null
         exp_date=$(date -d "+$4 days" +%Y-%m-%d)
         useradd -m -s /usr/sbin/nologin -e "$exp_date" "$2"
         echo "$2:$3" | chpasswd
-        echo "$2 hard maxlogins 1" >> /etc/security/limits.conf
         echo "$2|$exp_date|$5|$3|0|active" >> "$DB_FILE"
         ;;
     del_api) sed -i "/^$2|/d" "$DB_FILE"; userdel -f "$2" 2>/dev/null ;;
@@ -142,16 +163,14 @@ case $1 in
             if ! id "$user" &>/dev/null; then
                 useradd -m -s /usr/sbin/nologin -e "$exp" "$user"
                 echo "$user:$pass" | chpasswd
-                echo "$user hard maxlogins 1" >> /etc/security/limits.conf
                 [ "$status" == "disabled" ] && usermod -L "$user"
             fi
         done < "$DB_FILE" ;;
     *)
-        # تنظیم خودکار در اولین اجرا
-        cp "$0" /root/install.sh
-        chmod +x /root/install.sh
+        install_requirements
+        cp "$0" /root/install.sh; chmod +x /root/install.sh
         (crontab -l 2>/dev/null | grep -q "install.sh") || (crontab -l 2>/dev/null; echo "*/5 * * * * /bin/bash /root/install.sh cron > /dev/null 2>&1") | crontab -
         run_web
-        echo "✅ پنل با موفقیت فعال شد: http://IP:5000"
+        echo "✅ پنل با پورت ۴۴۳ فعال شد: http://IP:5000"
         ;;
 esac
